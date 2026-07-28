@@ -1,0 +1,16 @@
+{
+  "master_seed": 20260715,
+  "number_of_fields": 20,
+  "source_field_id_offset": 64,
+  "grid_size": 51,
+  "extent": 100.0,
+  "training_sample_size": 360,
+  "calibration_fraction": 0.20,
+  "test_fraction_of_extent": 0.20,
+  "buffer_width": 6.0,
+  "coefficient_range": 42.0,
+  "coefficient_strength": 0.95,
+  "residual_weight": 0.08,
+  "observation_noise": 0.04
+}
+

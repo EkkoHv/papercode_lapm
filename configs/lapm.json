@@ -1,0 +1,18 @@
+{
+  "lapm": {
+    "centers": 6,
+    "bandwidth_multipliers": [
+      0.4472135954999579,
+      1.0,
+      2.23606797749979
+    ],
+    "kernel": "gaussian",
+    "hidden_width": 64,
+    "residual_blocks": 2,
+    "dropout": 0.15,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "epochs": 180,
+    "mc_passes": 50
+  }
+}
