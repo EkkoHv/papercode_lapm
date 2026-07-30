@@ -38,13 +38,17 @@ def main() -> None:
         data = np.load(path)
         training_indices = data["training_indices"]
         test_indices = data["test_indices"]
-        model = LAPM(LAPMConfig(seed=2026 + field_number))
+        model = LAPM(LAPMConfig())
         model.fit(
             data["coordinates"][training_indices],
             data["covariates"][training_indices],
             data["target"][training_indices],
         )
-        prediction, prediction_sd = model.predict_mc(
+        prediction = model.predict(
+            data["coordinates"][test_indices],
+            data["covariates"][test_indices],
+        )
+        _, prediction_sd = model.predict_mc(
             data["coordinates"][test_indices],
             data["covariates"][test_indices],
         )

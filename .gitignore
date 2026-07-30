@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Generated data and results
+data/generated/
+data/external/
+results/
+
+# Model checkpoints and large arrays
+*.pt
+*.pth
+*.npy
+*.npz
+*.rda
+
+# Operating-system files
+.DS_Store
+Thumbs.db

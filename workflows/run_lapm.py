@@ -16,9 +16,16 @@ def main() -> None:
     parser.add_argument("--train", type=Path, required=True)
     parser.add_argument("--predict", type=Path, required=True)
     parser.add_argument("--target", required=True)
-    parser.add_argument("--covariates", nargs="+", required=True)
+    parser.add_argument(
+        "--covariates",
+        nargs="*",
+        default=[],
+        help="Optional covariate columns. Omit this argument to use spatial inputs only.",
+    )
     parser.add_argument("--x-column", default="x")
     parser.add_argument("--y-column", default="y")
+    parser.add_argument("--mc-passes", type=int, default=50)
+    parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--output", type=Path, default=Path("results/lapm_predictions.csv"))
     args = parser.parse_args()
 
@@ -33,8 +40,12 @@ def main() -> None:
     prediction_coordinates = prediction_frame[
         [args.x_column, args.y_column]
     ].to_numpy(dtype=float)
-    prediction_covariates = prediction_frame[args.covariates].to_numpy(dtype=float)
-    model = LAPM(LAPMConfig())
+    prediction_covariates = (
+        prediction_frame[args.covariates].to_numpy(dtype=float)
+        if args.covariates
+        else None
+    )
+    model = LAPM(LAPMConfig(mc_passes=args.mc_passes, seed=args.seed))
     model.fit(coordinates, covariates, target)
     prediction, standard_deviation = model.predict_mc(
         prediction_coordinates,

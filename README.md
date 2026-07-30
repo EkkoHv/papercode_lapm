@@ -48,13 +48,32 @@ the coordinates and available covariates:
 \right].
 ```
 
-A residual fully connected network learns the nonlinear prediction function.
-MC dropout supplies repeated stochastic predictions. The predictive variance
-combines variation among stochastic means with the mean conditional variance
-returned by the network.
+A residual fully connected network with a single scalar output learns the
+nonlinear prediction function using mean squared error. MC dropout remains
+active during inference and supplies repeated scalar predictions. Their mean
+is the predictive mean, and their population variance is the prediction
+variance:
 
-The reported default uses $K=6$ centers and $J=3$ bandwidths:
-$b_0/\sqrt{5}$, $b_0$, and $\sqrt{5}b_0$.
+```math
+\overline{\hat{y}}(\mathbf{s})
+=
+\frac{1}{N_{\mathrm{MC}}}
+\sum_{n=1}^{N_{\mathrm{MC}}}
+\hat{y}^{(n)}(\mathbf{s}),
+\qquad
+\sigma^2(\mathbf{s})
+=
+\frac{1}{N_{\mathrm{MC}}}
+\sum_{n=1}^{N_{\mathrm{MC}}}
+\left[
+\hat{y}^{(n)}(\mathbf{s})
+-
+\overline{\hat{y}}(\mathbf{s})
+\right]^2.
+```
+
+The reported default uses $K=6$ centers and $J=3$ bandwidths. Their recorded
+input-column order is $\sqrt{5}b_0$, $b_0$, and $b_0/\sqrt{5}$.
 
 ## Repository structure
 
@@ -139,14 +158,16 @@ python workflows/run_random_field_lapm.py --fields 2
 
 The output contains the MAE, RMSE, coefficient of determination, and mean
 predictive standard deviation for each field, together with a summary across
-the evaluated fields. Spatial centers, preprocessing transformations, and
-network parameters are fitted using the training locations only.
+the evaluated fields. Accuracy metrics use predictions with dropout disabled,
+whereas the predictive standard deviation is estimated from 50 stochastic
+forward passes. Spatial centers, preprocessing transformations, and network
+parameters are fitted using the training locations only.
 
 ## Run LAPM on local case data
 
 Convert an authorized local copy of a case data set to CSV. The default schema
-uses `x`, `y`, one target column, and one or more covariate columns. An empty
-header template is provided in `data/example_schema.csv`.
+uses `x`, `y`, one target column, and optional covariate columns. An empty header
+template is provided in `data/example_schema.csv`.
 
 ```bash
 python workflows/run_lapm.py \
@@ -154,11 +175,25 @@ python workflows/run_lapm.py \
   --predict data/external/prediction_locations.csv \
   --target target \
   --covariates covariate_1 covariate_2 \
+  --mc-passes 100 \
   --output results/lapm_predictions.csv
 ```
 
-The prediction file must contain coordinates and covariates but does not need a
-target column. The output contains `prediction` and `prediction_sd`.
+The prediction file must contain coordinates and the covariates named on the
+command line, if any, but does not need a target column. The output contains
+`prediction` and `prediction_sd`. The random-field workflow uses 50 MC dropout
+passes, while the two measured cases reported in the manuscript use 100.
+
+When covariates are unavailable, omit `--covariates`; LAPM then uses the
+coordinates and multi-scale RBF responses:
+
+```bash
+python workflows/run_lapm.py \
+  --train data/external/train.csv \
+  --predict data/external/prediction_locations.csv \
+  --target target \
+  --output results/lapm_predictions.csv
+```
 
 ## Core configuration
 
@@ -170,12 +205,17 @@ The manuscript configuration is stored in `configs/lapm.json`. LAPM uses:
 | RBF scales $J$ | 3 |
 | Hidden feature dimension | 64 |
 | Residual blocks | 2 |
+| Hidden normalization | LayerNorm |
+| Activation | ReLU |
 | Dropout | 0.15 |
+| Output dimension | 1 |
+| Training loss | Mean squared error |
 | Optimizer | AdamW |
 | Learning rate | $10^{-3}$ |
 | Weight decay | $10^{-4}$ |
 | Training epochs | 180 |
 | MC dropout passes | 50 |
+| MC variance divisor | $N_{\mathrm{MC}}$ |
 
 The number and spacing of RBF scales can be changed for a new data set, but
 selection should be performed inside the training data using spatial

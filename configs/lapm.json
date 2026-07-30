@@ -2,17 +2,27 @@
   "lapm": {
     "centers": 6,
     "bandwidth_multipliers": [
-      0.4472135954999579,
+      2.23606797749979,
       1.0,
-      2.23606797749979
+      0.4472135954999579
     ],
     "kernel": "gaussian",
     "hidden_width": 64,
     "residual_blocks": 2,
+    "activation": "relu",
+    "normalization": "layer_normalization",
     "dropout": 0.15,
+    "output_dimension": 1,
+    "training_loss": "mean_squared_error",
+    "optimizer": "adamw",
     "learning_rate": 0.001,
     "weight_decay": 0.0001,
+    "learning_rate_scheduler": "cosine_annealing",
+    "gradient_clip_norm": 5.0,
+    "batch_size": "full_training_set",
+    "early_stopping": false,
     "epochs": 180,
-    "mc_passes": 50
+    "mc_passes": 50,
+    "mc_variance": "population_variance_across_stochastic_predictions"
   }
 }

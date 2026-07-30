@@ -10,6 +10,7 @@ import numpy as np
 import torch
 from scipy.spatial.distance import cdist
 from sklearn.cluster import KMeans
+from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 
 
@@ -30,9 +31,9 @@ class LAPMConfig:
 
     centers: int = 6
     bandwidth_multipliers: tuple[float, ...] = (
-        1.0 / np.sqrt(5.0),
-        1.0,
         np.sqrt(5.0),
+        1.0,
+        1.0 / np.sqrt(5.0),
     )
     hidden_width: int = 64
     residual_blocks: int = 2
@@ -75,10 +76,12 @@ class LocalAssociationFeatures:
         if number == 1:
             spans = np.ptp(coordinates, axis=0)
             reference = float(max(np.max(spans) / 4.0, 1.0e-8))
+        elif number == 2:
+            reference = float(np.linalg.norm(self.centers[0] - self.centers[1]))
         else:
-            distances = cdist(self.centers, self.centers)
-            np.fill_diagonal(distances, np.inf)
-            reference = float(np.median(np.min(distances, axis=1)))
+            nearest = NearestNeighbors(n_neighbors=2).fit(self.centers)
+            neighboring_distances = nearest.kneighbors(return_distance=True)[0]
+            reference = float(np.median(neighboring_distances[:, 1]))
         self.reference_bandwidth = max(reference, 1.0e-8)
         self.bandwidths = self.reference_bandwidth * self.bandwidth_multipliers
         return self
@@ -111,7 +114,7 @@ class ResidualBlock(torch.nn.Module):
 
 
 class ResidualRegressor(torch.nn.Module):
-    """Residual network returning a mean and a log variance."""
+    """Residual network returning one scalar prediction per location."""
 
     def __init__(self, input_size: int, config: LAPMConfig) -> None:
         super().__init__()
@@ -124,7 +127,7 @@ class ResidualRegressor(torch.nn.Module):
             ]
         )
         self.dropout = torch.nn.Dropout(config.dropout)
-        self.output_layer = torch.nn.Linear(config.hidden_width, 2)
+        self.output_layer = torch.nn.Linear(config.hidden_width, 1)
 
     def forward(self, values: torch.Tensor) -> torch.Tensor:
         hidden = torch.relu(self.input_normalization(self.input_layer(values)))
@@ -157,33 +160,58 @@ class LAPM:
 
     def _impute_covariates(
         self,
-        covariates: np.ndarray,
+        covariates: np.ndarray | None,
+        number_of_rows: int,
         fit: bool,
     ) -> np.ndarray:
-        covariates = np.asarray(covariates, dtype=float).copy()
-        if covariates.ndim == 1:
-            covariates = covariates[:, None]
+        if covariates is None:
+            covariate_array = np.empty((number_of_rows, 0), dtype=float)
+        else:
+            covariate_array = np.asarray(covariates, dtype=float).copy()
+            if covariate_array.ndim == 1:
+                covariate_array = covariate_array[:, None]
+            if covariate_array.ndim != 2:
+                raise ValueError("Covariates must have shape (n, p).")
+            if len(covariate_array) != number_of_rows:
+                raise ValueError(
+                    "Coordinates and covariates must contain the same number of rows."
+                )
         if fit:
-            self.covariate_medians = np.nanmedian(covariates, axis=0)
-            self.covariate_medians = np.where(
-                np.isfinite(self.covariate_medians),
-                self.covariate_medians,
-                0.0,
-            )
+            if covariate_array.shape[1] == 0:
+                self.covariate_medians = np.empty(0, dtype=float)
+            else:
+                self.covariate_medians = np.nanmedian(covariate_array, axis=0)
+                self.covariate_medians = np.where(
+                    np.isfinite(self.covariate_medians),
+                    self.covariate_medians,
+                    0.0,
+                )
         if self.covariate_medians is None:
             raise RuntimeError("Covariate preprocessing has not been fitted.")
-        row, column = np.where(~np.isfinite(covariates))
-        covariates[row, column] = self.covariate_medians[column]
-        return covariates
+        if covariate_array.shape[1] != len(self.covariate_medians):
+            raise ValueError(
+                "Prediction covariates must match those supplied during model fitting."
+            )
+        row, column = np.where(~np.isfinite(covariate_array))
+        covariate_array[row, column] = self.covariate_medians[column]
+        return covariate_array
 
     def _raw_features(
         self,
         coordinates: np.ndarray,
-        covariates: np.ndarray,
+        covariates: np.ndarray | None,
         fit: bool,
     ) -> np.ndarray:
         coordinates = np.asarray(coordinates, dtype=float)
-        ancillary = self._impute_covariates(covariates, fit=fit)
+        if coordinates.ndim != 2 or coordinates.shape[1] != 2:
+            raise ValueError("Coordinates must have shape (n, 2).")
+        if not np.isfinite(coordinates).all():
+            raise ValueError("Coordinates cannot contain missing or nonfinite values.")
+        ancillary = self._impute_covariates(
+            covariates,
+            number_of_rows=len(coordinates),
+            fit=fit,
+        )
         if fit:
             self.spatial_features.fit(coordinates)
         responses = self.spatial_features.transform(coordinates)
@@ -192,7 +220,7 @@ class LAPM:
     def fit(
         self,
         coordinates: np.ndarray,
-        covariates: np.ndarray,
+        covariates: np.ndarray | None,
         target: np.ndarray,
     ) -> "LAPM":
         """Fit all preprocessing operations and network weights."""
@@ -200,6 +228,12 @@ class LAPM:
         set_seed(self.config.seed)
         target = np.asarray(target, dtype=float).ravel()
         raw_features = self._raw_features(coordinates, covariates, fit=True)
+        if len(target) != len(raw_features):
+            raise ValueError(
+                "Coordinates and target values must contain the same number of rows."
+            )
+        if not np.isfinite(target).all():
+            raise ValueError("Target values cannot contain missing or nonfinite values.")
         features = self.feature_scaler.fit_transform(raw_features).astype(np.float32)
         self.target_mean = float(np.mean(target))
         self.target_scale = float(max(np.std(target, ddof=0), 1.0e-8))
@@ -222,11 +256,7 @@ class LAPM:
         for _ in range(self.config.epochs):
             optimizer.zero_grad(set_to_none=True)
             output = self.network(x_tensor)
-            mean = output[:, 0]
-            log_variance = torch.clamp(output[:, 1], min=-8.0, max=6.0)
-            loss = 0.5 * torch.mean(
-                log_variance + (y_tensor - mean) ** 2 * torch.exp(-log_variance)
-            )
+            loss = torch.mean((output[:, 0] - y_tensor) ** 2)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=5.0)
             optimizer.step()
@@ -236,7 +266,7 @@ class LAPM:
     def _scaled_features(
         self,
         coordinates: np.ndarray,
-        covariates: np.ndarray,
+        covariates: np.ndarray | None,
     ) -> torch.Tensor:
         raw = self._raw_features(coordinates, covariates, fit=False)
         scaled = self.feature_scaler.transform(raw).astype(np.float32)
@@ -245,7 +275,7 @@ class LAPM:
     def predict(
         self,
         coordinates: np.ndarray,
-        covariates: np.ndarray,
+        covariates: np.ndarray | None = None,
     ) -> np.ndarray:
         """Return deterministic predictions with dropout disabled."""
 
@@ -260,33 +290,32 @@ class LAPM:
     def predict_mc(
         self,
         coordinates: np.ndarray,
-        covariates: np.ndarray,
+        covariates: np.ndarray | None = None,
         passes: int | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Return the MC dropout predictive mean and standard deviation."""
+        """Return the mean and population SD of stochastic MC dropout predictions."""
 
         if self.network is None or self.target_mean is None or self.target_scale is None:
             raise RuntimeError("The model has not been fitted.")
+        number_of_passes = self.config.mc_passes if passes is None else int(passes)
+        if number_of_passes < 1:
+            raise ValueError("The number of MC dropout passes must be positive.")
         set_seed(self.config.seed + 1000)
         features = self._scaled_features(coordinates, covariates)
         self.network.train()
-        mean_samples: list[np.ndarray] = []
-        variance_samples: list[np.ndarray] = []
+        prediction_samples: list[np.ndarray] = []
         with torch.no_grad():
-            for _ in range(passes or self.config.mc_passes):
+            for _ in range(number_of_passes):
                 output = self.network(features)
-                mean_samples.append(output[:, 0].detach().cpu().numpy())
-                variance_samples.append(
-                    torch.exp(torch.clamp(output[:, 1], -8.0, 6.0))
-                    .detach()
-                    .cpu()
-                    .numpy()
+                normalized = output[:, 0].detach().cpu().numpy()
+                prediction_samples.append(
+                    normalized * self.target_scale + self.target_mean
                 )
-        means = np.stack(mean_samples) * self.target_scale + self.target_mean
-        conditional_variances = np.stack(variance_samples) * self.target_scale**2
-        predictive_mean = means.mean(axis=0)
-        total_variance = means.var(axis=0, ddof=1) + conditional_variances.mean(axis=0)
-        return predictive_mean, np.sqrt(np.maximum(total_variance, 1.0e-12))
+        samples = np.stack(prediction_samples, axis=0)
+        predictive_mean = samples.mean(axis=0)
+        predictive_variance = samples.var(axis=0, ddof=0)
+        self.network.eval()
+        return predictive_mean, np.sqrt(np.maximum(predictive_variance, 0.0))
 
     @property
     def fitted_settings(self) -> dict[str, object]:
@@ -303,5 +332,9 @@ class LAPM:
             "input_dimension": None
             if self.network is None
             else self.network.input_layer.in_features,
+            "output_dimension": 1,
+            "training_loss": "mean_squared_error",
+            "normalization": "layer_normalization",
+            "mc_variance": "population_variance_across_stochastic_predictions",
             "device": str(self.device),
         }
